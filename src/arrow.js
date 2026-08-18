@@ -1,5 +1,58 @@
 import { createSVG } from './svg_utils';
 
+function rounded_ortho_path(points, radius) {
+    const pts = [];
+    for (const p of points) {
+        const last = pts[pts.length - 1];
+        if (last && last.x === p.x && last.y === p.y) continue;
+        pts.push(p);
+    }
+
+    if (pts.length === 0) return '';
+    if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+    if (pts.length === 2) {
+        return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
+    }
+    if (radius <= 0) {
+        return pts
+            .map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`)
+            .join(' ');
+    }
+
+    let d = `M ${pts[0].x} ${pts[0].y}`;
+    for (let i = 1; i < pts.length; i++) {
+        const prev = pts[i - 1];
+        const curr = pts[i];
+        const next = pts[i + 1];
+        if (!next) {
+            d += ` L ${curr.x} ${curr.y}`;
+            break;
+        }
+
+        const in_len = Math.hypot(curr.x - prev.x, curr.y - prev.y);
+        const out_len = Math.hypot(next.x - curr.x, next.y - curr.y);
+        const r = Math.min(radius, in_len / 2, out_len / 2);
+        if (r < 0.5) {
+            d += ` L ${curr.x} ${curr.y}`;
+            continue;
+        }
+
+        const in_dx = (curr.x - prev.x) / in_len;
+        const in_dy = (curr.y - prev.y) / in_len;
+        const out_dx = (next.x - curr.x) / out_len;
+        const out_dy = (next.y - curr.y) / out_len;
+        const cross = in_dx * out_dy - in_dy * out_dx;
+        if (cross === 0) {
+            d += ` L ${curr.x} ${curr.y}`;
+            continue;
+        }
+
+        d += ` L ${curr.x - in_dx * r} ${curr.y - in_dy * r}`;
+        d += ` A ${r} ${r} 0 0 ${cross > 0 ? 1 : 0} ${curr.x + out_dx * r} ${curr.y + out_dy * r}`;
+    }
+    return d;
+}
+
 export default class Arrow {
     constructor(gantt, from_task, to_task) {
         this.gantt = gantt;
@@ -11,11 +64,9 @@ export default class Arrow {
     }
 
     /**
-     * Orthogonal finish-to-start routing:
-     * start at the right edge (vertical center) of the predecessor bar,
-     * end at the left edge (vertical center) of the successor bar.
-     * Avoids the previous mid-bar + curve path that often crossed bars
-     * when tasks overlapped or the successor started to the left.
+     * Orthogonal finish-to-start routing with rounded elbows
+     * (MS Project-style): start at the right edge of the predecessor,
+     * end at the left edge of the successor.
      */
     calculate_path() {
         const options = this.gantt.options;
@@ -40,28 +91,35 @@ export default class Arrow {
             (padding + bar_height) * to_index +
             padding / 2;
 
-        // Reuse arrow_curve as the stub/gap size for orthogonal corners.
-        const gap = Math.max(padding / 2, options.arrow_curve || 5, 8);
+        const radius = Math.max(
+            0,
+            Number.isFinite(Number(options.arrow_curve))
+                ? Number(options.arrow_curve)
+                : 12,
+        );
+        const gap = Math.max(padding / 2, radius * 2 + 4, 10);
         const arrowhead = `
             m -5 -5
             l 5 5
             l -5 5`;
 
+        let points;
         if (end_x >= start_x) {
             const stub = start_x + gap;
             if (stub < end_x) {
-                this.path = `
-                    M ${start_x} ${start_y}
-                    H ${stub}
-                    V ${end_y}
-                    L ${end_x} ${end_y}${arrowhead}`;
+                points = [
+                    { x: start_x, y: start_y },
+                    { x: stub, y: start_y },
+                    { x: stub, y: end_y },
+                    { x: end_x, y: end_y },
+                ];
             } else {
-                this.path = `
-                    M ${start_x} ${start_y}
-                    L ${end_x} ${end_y}${arrowhead}`;
+                points = [
+                    { x: start_x, y: start_y },
+                    { x: end_x, y: end_y },
+                ];
             }
         } else {
-            // Successor starts at/before predecessor end: route around the bars.
             const stub = start_x + gap;
             const left = end_x - gap;
             const going_down = from_index < to_index;
@@ -69,14 +127,17 @@ export default class Arrow {
                 ? Math.max(start_y, end_y) + bar_height / 2 + gap
                 : Math.min(start_y, end_y) - bar_height / 2 - gap;
 
-            this.path = `
-                M ${start_x} ${start_y}
-                H ${stub}
-                V ${mid_y}
-                H ${left}
-                V ${end_y}
-                L ${end_x} ${end_y}${arrowhead}`;
+            points = [
+                { x: start_x, y: start_y },
+                { x: stub, y: start_y },
+                { x: stub, y: mid_y },
+                { x: left, y: mid_y },
+                { x: left, y: end_y },
+                { x: end_x, y: end_y },
+            ];
         }
+
+        this.path = `${rounded_ortho_path(points, radius)}${arrowhead}`;
     }
 
     draw() {
