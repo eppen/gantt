@@ -10,81 +10,72 @@ export default class Arrow {
         this.draw();
     }
 
+    /**
+     * Orthogonal finish-to-start routing:
+     * start at the right edge (vertical center) of the predecessor bar,
+     * end at the left edge (vertical center) of the successor bar.
+     * Avoids the previous mid-bar + curve path that often crossed bars
+     * when tasks overlapped or the successor started to the left.
+     */
     calculate_path() {
-        let start_x =
-            this.from_task.$bar.getX() + this.from_task.$bar.getWidth() / 2;
+        const options = this.gantt.options;
+        const from_bar = this.from_task.$bar;
+        const to_bar = this.to_task.$bar;
+        const padding = options.padding;
+        const bar_height = options.bar_height;
+        const header_height = this.gantt.config.header_height;
+        const from_index = this.from_task.task._index;
+        const to_index = this.to_task.task._index;
 
-        const condition = () =>
-            this.to_task.$bar.getX() < start_x + this.gantt.options.padding &&
-            start_x > this.from_task.$bar.getX() + this.gantt.options.padding;
+        const start_x = from_bar.getX() + from_bar.getWidth();
+        const start_y =
+            header_height +
+            bar_height / 2 +
+            (padding + bar_height) * from_index +
+            padding / 2;
+        const end_x = to_bar.getX();
+        const end_y =
+            header_height +
+            bar_height / 2 +
+            (padding + bar_height) * to_index +
+            padding / 2;
 
-        while (condition()) {
-            start_x -= 10;
-        }
-        start_x -= 10;
+        // Reuse arrow_curve as the stub/gap size for orthogonal corners.
+        const gap = Math.max(padding / 2, options.arrow_curve || 5, 8);
+        const arrowhead = `
+            m -5 -5
+            l 5 5
+            l -5 5`;
 
-        let start_y =
-            this.gantt.config.header_height +
-            this.gantt.options.bar_height +
-            (this.gantt.options.padding + this.gantt.options.bar_height) *
-                this.from_task.task._index +
-            this.gantt.options.padding / 2;
-
-        let end_x = this.to_task.$bar.getX() - 13;
-        let end_y =
-            this.gantt.config.header_height +
-            this.gantt.options.bar_height / 2 +
-            (this.gantt.options.padding + this.gantt.options.bar_height) *
-                this.to_task.task._index +
-            this.gantt.options.padding / 2;
-
-        const from_is_below_to =
-            this.from_task.task._index > this.to_task.task._index;
-
-        let curve = this.gantt.options.arrow_curve;
-        const clockwise = from_is_below_to ? 1 : 0;
-        let curve_y = from_is_below_to ? -curve : curve;
-
-        if (
-            this.to_task.$bar.getX() <=
-            this.from_task.$bar.getX() + this.gantt.options.padding
-        ) {
-            let down_1 = this.gantt.options.padding / 2 - curve;
-            if (down_1 < 0) {
-                down_1 = 0;
-                curve = this.gantt.options.padding / 2;
-                curve_y = from_is_below_to ? -curve : curve;
+        if (end_x >= start_x) {
+            const stub = start_x + gap;
+            if (stub < end_x) {
+                this.path = `
+                    M ${start_x} ${start_y}
+                    H ${stub}
+                    V ${end_y}
+                    L ${end_x} ${end_y}${arrowhead}`;
+            } else {
+                this.path = `
+                    M ${start_x} ${start_y}
+                    L ${end_x} ${end_y}${arrowhead}`;
             }
-            const down_2 =
-                this.to_task.$bar.getY() +
-                this.to_task.$bar.getHeight() / 2 -
-                curve_y;
-            const left = this.to_task.$bar.getX() - this.gantt.options.padding;
+        } else {
+            // Successor starts at/before predecessor end: route around the bars.
+            const stub = start_x + gap;
+            const left = end_x - gap;
+            const going_down = from_index < to_index;
+            const mid_y = going_down
+                ? Math.max(start_y, end_y) + bar_height / 2 + gap
+                : Math.min(start_y, end_y) - bar_height / 2 - gap;
+
             this.path = `
                 M ${start_x} ${start_y}
-                v ${down_1}
-                a ${curve} ${curve} 0 0 1 ${-curve} ${curve}
+                H ${stub}
+                V ${mid_y}
                 H ${left}
-                a ${curve} ${curve} 0 0 ${clockwise} ${-curve} ${curve_y}
-                V ${down_2}
-                a ${curve} ${curve} 0 0 ${clockwise} ${curve} ${curve_y}
-                L ${end_x} ${end_y}
-                m -5 -5
-                l 5 5
-                l -5 5`;
-        } else {
-            if (end_x < start_x + curve) curve = end_x - start_x;
-
-            let offset = from_is_below_to ? end_y + curve : end_y - curve;
-
-            this.path = `
-              M ${start_x} ${start_y}
-              V ${offset}
-              a ${curve} ${curve} 0 0 ${clockwise} ${curve} ${curve}
-              L ${end_x} ${end_y}
-              m -5 -5
-              l 5 5
-              l -5 5`;
+                V ${end_y}
+                L ${end_x} ${end_y}${arrowhead}`;
         }
     }
 
